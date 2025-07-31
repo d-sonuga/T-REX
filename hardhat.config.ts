@@ -6,6 +6,8 @@ import 'solidity-coverage';
 import '@nomiclabs/hardhat-solhint';
 import '@primitivefi/hardhat-dodoc';
 
+require('dotenv').config();
+
 const config: HardhatUserConfig = {
   solidity: {
     version: '0.8.17',
@@ -15,6 +17,22 @@ const config: HardhatUserConfig = {
         runs: 200,
       },
     },
+  },
+  networks: {
+    duskevm: {
+      url: 'http://l2-rpc.evm-test.dusk.network:8545',
+      accounts: [
+        process.env.PRIVATE_KEY_1,
+        process.env.PRIVATE_KEY_2,
+        process.env.PRIVATE_KEY_3,
+        process.env.PRIVATE_KEY_4,
+        process.env.PRIVATE_KEY_5,
+        process.env.PRIVATE_KEY_6,
+        process.env.PRIVATE_KEY_7,
+        process.env.PRIVATE_KEY_8,
+        process.env.PRIVATE_KEY_9,
+      ],
+    }
   },
   gasReporter: {
     enabled: true,
