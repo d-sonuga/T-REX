@@ -5,7 +5,7 @@ const onchainid = require('@onchain-id/solidity');
 
 /**
  * This is an example script of how to deploy a token and interact with it.
- * 
+ *
  * To run locally, first run a local node `npx hardhat node` then run
  * `npx hardhat run deploy.js --network localhost`.
  */
@@ -24,11 +24,14 @@ async function main() {
   // `investorIdManager` address is the management key for the investors identity contracts and is used to add their claim keys.
   const [owner, otherTokenDeployer, claimIssuerManager, kycClaimSigner, claimKey, investor1, investor2, investor3, investorIdManager] =
     await ethers.getSigners();
-  
+
   // First, deploy the TREX contract implementations
+  console.log('Deploying TREX contract implementations');
   const trexContracts = await deployTREXContractImplementations();
+  console.log('Done deploying TREX contract implementations\n');
 
   // Set up ImplementationAuthority to use the contract implementations just deployed
+  console.log('Deploying TREXImplementationAuthority');
   const implementationAuthority = await getAndDeployContract(
     'TREXImplementationAuthority',
     true, // referenceStatus
@@ -38,47 +41,60 @@ async function main() {
     ethers.constants.AddressZero, // iaFactory
   );
   const version = { major: 0, minor: 1, patch: 0 };
-  await implementationAuthority.addAndUseTREXVersion(version, trexContracts);
+  await awaitTx(implementationAuthority.addAndUseTREXVersion(version, trexContracts));
+  console.log('Done deploying TREXImplementationAuthority');
 
+  console.log('Deploying IdentityRegistryStorageProxy');
   // Creating an Identity Registry Storage upfront which can be reused for all tokens.
   // NOTE: there is a hard limit of 300 Identity Registry instances that can be bound to a single Identity Registry Storage,
   // so having >300 tokens will become problematic using this single IRS approach.
   const identityRegistryStorage = await getAndDeployContract('IdentityRegistryStorageProxy', implementationAuthority.address).then(async (proxy) =>
     ethers.getContractAt('IdentityRegistryStorage', proxy.address),
   );
+  console.log('Done deploying IdentityRegistryStorageProxy');
 
   // Deploy & setup IdFactory and TREXFactory
+  console.log('Deploying IdFactory');
   const idFactory = await getAndDeployIdFactory(owner);
   const trexFactory = await getAndDeployContract('TREXFactory', implementationAuthority.address, idFactory.address);
-  await idFactory.addTokenFactory(trexFactory.address);
-  await implementationAuthority.setTREXFactory(trexFactory.address);
+  await awaitTx(idFactory.addTokenFactory(trexFactory.address));
+  await awaitTx(implementationAuthority.setTREXFactory(trexFactory.address));
   const implementationAuthorityFactory = await getAndDeployContract('IAFactory', trexFactory.address);
-  await implementationAuthority.setIAFactory(implementationAuthorityFactory.address);
+  await awaitTx(implementationAuthority.setIAFactory(implementationAuthorityFactory.address));
   // The factory needs to be the owner of the Identity Registry Storage because it will bind it to the token's
   // identity registry.
-  identityRegistryStorage.connect(owner).transferOwnership(trexFactory.address);
+  await awaitTx(identityRegistryStorage.connect(owner).transferOwnership(trexFactory.address));
+  console.log('Done deploying IdFactory and TREXFactory\n');
 
   // Create Id & TREX gateways with their factories and grant deployment rights.
+  console.log('Creating Id & TREX gateways');
   const publicDeploymentStatus = true;
   const trexGateway = await getAndDeployContract('TREXGateway', trexFactory.address, publicDeploymentStatus);
-  await trexGateway.addDeployer(otherTokenDeployer.address);
-  await trexFactory.transferOwnership(trexGateway.address);
+  console.log('trexGateway:', trexGateway.address);
+  await awaitTx(trexGateway.addDeployer(otherTokenDeployer.address));
+  await awaitTx(trexFactory.transferOwnership(trexGateway.address));
 
   const signersToApprove = [owner.address];
   const idGateway = await getAndDeployIdGateway(idFactory, signersToApprove);
-  idFactory.transferOwnership(idGateway.address);
+  await awaitTx(idFactory.transferOwnership(idGateway.address));
+  console.log('Done creating Id & TREX gateways\n');
 
   // Trusted issuers
+  console.log('Setting up trusted issuers');
   const kycClaimIssuer = await getAndDeployContract('ClaimIssuer', claimIssuerManager.address);
-  await kycClaimIssuer
-    .connect(claimIssuerManager)
-    .addKey(
-      IdentitySDK.utils.encodeAndHash(['address'], [kycClaimSigner.address]),
-      IdentitySDK.utils.enums.KeyPurpose.CLAIM,
-      IdentitySDK.utils.enums.KeyType.ECDSA,
-    );
+  await awaitTx(
+    kycClaimIssuer
+      .connect(claimIssuerManager)
+      .addKey(
+        IdentitySDK.utils.encodeAndHash(['address'], [kycClaimSigner.address]),
+        IdentitySDK.utils.enums.KeyPurpose.CLAIM,
+        IdentitySDK.utils.enums.KeyType.ECDSA,
+      ),
+  );
+  console.log('Done setting up trusted issuers\n');
 
   // Create tokens.
+  console.log('Creating tokens');
   const [
     tokenAddressA,
     identityRegistryAddressA,
@@ -120,55 +136,73 @@ async function main() {
 
   const tokenA = await ethers.getContractAt('Token', tokenAddressA);
   const tokenB = await ethers.getContractAt('Token', tokenAddressB);
+  console.log('tokenA:', tokenA.address);
+  console.log('tokenB:', tokenB.address);
   const identityRegistryA = await ethers.getContractAt('IdentityRegistry', identityRegistryAddressA);
+  console.log('Done creating tokens\n');
 
   // Owner's identity isn't verified yet by the trusted issuers.
+  console.log('Testing that owner identity is not yet verified');
   await expect(tokenA.mint(owner.address, 100)).to.be.revertedWith('Identity is not verified.');
   await expect(tokenB.mint(owner.address, 100)).to.be.revertedWith('Identity is not verified.');
+  console.log('Done testing owner identity verification\n');
 
   // Creating identities for the users.
   // The owner is created with its address as a single management key.
   // investor1 & 2 are created with their regular addresses linked but with a separate management key
   //  that will be used to add a claim key.
+  console.log('Creating identities for users');
   const ownerIdentity = await createIdentity(idGateway, owner.address);
   const investor1Identity = await createIdentityWithMgmtKey(idGateway, investor1.address, investorIdManager, owner);
   const investor2Identity = await createIdentityWithMgmtKey(idGateway, investor2.address, investorIdManager, owner);
   const investor3Identity = await createIdentityWithMgmtKey(idGateway, investor3.address, investorIdManager, owner);
+  console.log('Done creating identities for users\n');
 
   // Add claim key to the user identities that will be used to call `addClaim`
   // on their identity contracts with a KYC verified claim.
-  await ownerIdentity
-    .connect(owner)
-    .addKey(
-      IdentitySDK.utils.encodeAndHash(['address'], [claimKey.address]),
-      IdentitySDK.utils.enums.KeyPurpose.CLAIM,
-      IdentitySDK.utils.enums.KeyType.ECDSA,
-    );
-  await investor1Identity
-    .connect(investorIdManager)
-    .addKey(
-      IdentitySDK.utils.encodeAndHash(['address'], [claimKey.address]),
-      IdentitySDK.utils.enums.KeyPurpose.CLAIM,
-      IdentitySDK.utils.enums.KeyType.ECDSA,
-    );
-  await investor2Identity
-    .connect(investorIdManager)
-    .addKey(
-      IdentitySDK.utils.encodeAndHash(['address'], [claimKey.address]),
-      IdentitySDK.utils.enums.KeyPurpose.CLAIM,
-      IdentitySDK.utils.enums.KeyType.ECDSA,
-    );
+  console.log('Adding claim keys to user identities');
+  await awaitTx(
+    ownerIdentity
+      .connect(owner)
+      .addKey(
+        IdentitySDK.utils.encodeAndHash(['address'], [claimKey.address]),
+        IdentitySDK.utils.enums.KeyPurpose.CLAIM,
+        IdentitySDK.utils.enums.KeyType.ECDSA,
+      ),
+  );
+  await awaitTx(
+    investor1Identity
+      .connect(investorIdManager)
+      .addKey(
+        IdentitySDK.utils.encodeAndHash(['address'], [claimKey.address]),
+        IdentitySDK.utils.enums.KeyPurpose.CLAIM,
+        IdentitySDK.utils.enums.KeyType.ECDSA,
+      ),
+  );
+  await awaitTx(
+    investor2Identity
+      .connect(investorIdManager)
+      .addKey(
+        IdentitySDK.utils.encodeAndHash(['address'], [claimKey.address]),
+        IdentitySDK.utils.enums.KeyPurpose.CLAIM,
+        IdentitySDK.utils.enums.KeyType.ECDSA,
+      ),
+  );
+  console.log('Done adding claim keys to user identities\n');
 
   // The user identities need to be registered in both tokens identity registries
+  console.log('Registering identities in identity registry');
   const countryCode = 0;
   // Because both tokens use the same underlying Identity Registry Storage, this info only needs to
   // be recorded once.
-  await identityRegistryA.registerIdentity(owner.address, ownerIdentity.address, countryCode);
-  await identityRegistryA.registerIdentity(investor1.address, investor1Identity.address, countryCode);
-  await identityRegistryA.registerIdentity(investor2.address, investor2Identity.address, countryCode);
-  await identityRegistryA.registerIdentity(investor3.address, investor3Identity.address, countryCode);
+  await awaitTx(identityRegistryA.registerIdentity(owner.address, ownerIdentity.address, countryCode));
+  await awaitTx(identityRegistryA.registerIdentity(investor1.address, investor1Identity.address, countryCode));
+  await awaitTx(identityRegistryA.registerIdentity(investor2.address, investor2Identity.address, countryCode));
+  await awaitTx(identityRegistryA.registerIdentity(investor3.address, investor3Identity.address, countryCode));
+  console.log('Done registering identities in identity registry\n');
 
   // Add KYC verified claims to the user's identities.
+  console.log('Adding KYC verified claims to user identities');
   await addKYCVerifiedClaim({
     identity: ownerIdentity,
     issuer: kycClaimIssuer,
@@ -187,30 +221,41 @@ async function main() {
     claimSigner: kycClaimSigner,
     userClaimKey: claimKey,
   });
+  console.log('Done adding KYC verified claims to user identities\n');
 
   // Can now mint and transfer tokens.
-  await tokenA.mint(owner.address, 1000);
-  await tokenB.mint(owner.address, 500);
+  console.log('Minting tokens to owner');
+  await awaitTx(tokenA.mint(owner.address, 1000));
+  await awaitTx(tokenB.mint(owner.address, 500));
+  console.log('Done minting tokens to owner\n');
 
+  console.log('Testing that investors cannot mint tokens');
   await expect(tokenA.connect(investor1).mint(investor1.address, 100)).to.be.revertedWith('AgentRole: caller does not have the Agent role');
   await expect(tokenB.connect(investor2).mint(investor2.address, 100)).to.be.revertedWith('AgentRole: caller does not have the Agent role');
+  console.log('Done testing investor mint restrictions\n');
 
-  await tokenA.unpause();
-  await tokenB.unpause();
+  console.log('Unpausing tokens');
+  await awaitTx(tokenA.unpause());
+  await awaitTx(tokenB.unpause());
+  console.log('Done unpausing tokens\n');
 
-  await tokenA.connect(owner).transfer(investor1.address, 500);
-  await tokenA.connect(investor1).transfer(investor2.address, 250);
-  await tokenA.connect(investor2).transfer(owner.address, 125);
-  await tokenB.connect(owner).transfer(investor1.address, 200);
+  console.log('Testing token transfers');
+  await awaitTx(tokenA.connect(owner).transfer(investor1.address, 500));
+  await awaitTx(tokenA.connect(investor1).transfer(investor2.address, 250));
+  await awaitTx(tokenA.connect(investor2).transfer(owner.address, 125));
+  await awaitTx(tokenB.connect(owner).transfer(investor1.address, 200));
   // investor3's identity is never verified, so these fail.
   await expect(tokenA.connect(owner).transfer(investor3.address, 1)).to.be.revertedWith('Transfer not possible');
+  console.log('Done testing token transfers\n');
 
+  console.log('Verifying final token balances');
   expect(await tokenA.balanceOf(owner.address)).to.be.equal(625);
   expect(await tokenA.balanceOf(investor1.address)).to.be.equal(250);
   expect(await tokenA.balanceOf(investor2.address)).to.be.equal(125);
   expect(await tokenB.balanceOf(owner.address)).to.be.equal(300);
   expect(await tokenB.balanceOf(investor1.address)).to.be.equal(200);
   expect(await tokenB.balanceOf(investor2.address)).to.be.equal(0);
+  console.log('Done verifying final token balances\n');
 
   console.log('Done');
 }
@@ -234,7 +279,9 @@ async function createToken({ trexGateway, owner, deployer, name, symbol, decimal
     issuers,
     issuerClaims,
   };
-  const tx = await trexGateway.connect(deployer).deployTREXSuite(tokenDetails, claimDetails);
+  const tx = await trexGateway.connect(deployer).deployTREXSuite(tokenDetails, claimDetails, {
+    gasLimit: 10_000_000,
+  });
   const receipt = await tx.wait();
   const trexFactoryAddress = await trexGateway.getFactory();
   const trexFactory = await ethers.getContractAt('TREXFactory', trexFactoryAddress);
@@ -260,11 +307,13 @@ async function addKYCVerifiedClaim({ identity, issuer, claimSigner, userClaimKey
     ethers.utils.defaultAbiCoder.encode(['address', 'uint256', 'bytes'], [identityAddress, claimTopic, claimData]),
   );
   const signature = await claimSigner.signMessage(ethers.utils.arrayify(hashToSign));
-  await identity.connect(userClaimKey).addClaim(claimTopic, scheme, issuerAddress, signature, claimData, uri);
+  await awaitTx(identity.connect(userClaimKey).addClaim(claimTopic, scheme, issuerAddress, signature, claimData, uri));
 }
 
 async function createIdentity(idGateway, walletAddress) {
-  const tx = await idGateway.deployIdentityForWallet(walletAddress);
+  const tx = await idGateway.deployIdentityForWallet(walletAddress, {
+    gasLimit: 10_000_000,
+  });
   const receipt = await tx.wait();
   const idFactoryAddress = await idGateway.idFactory();
   const idFactory = await ethers.getContractAt(onchainid.contracts.Factory.abi, idFactoryAddress);
@@ -289,7 +338,9 @@ async function createIdentityWithMgmtKey(idGateway, walletAddress, managerSigner
     ),
   );
   const signature = await approver.signMessage(ethers.utils.arrayify(hashToSign));
-  const tx = await idGateway.deployIdentityWithSaltAndManagementKeys(identityOwner, salt, mgmtKeys, signatureExpiry, signature);
+  const tx = await idGateway.deployIdentityWithSaltAndManagementKeys(identityOwner, salt, mgmtKeys, signatureExpiry, signature, {
+    gasLimit: 10_000_000,
+  });
   const receipt = await tx.wait();
   const idFactoryAddress = await idGateway.idFactory();
   const idFactory = await ethers.getContractAt(onchainid.contracts.Factory.abi, idFactoryAddress);
@@ -300,11 +351,17 @@ async function createIdentityWithMgmtKey(idGateway, walletAddress, managerSigner
 }
 
 async function deployTREXContractImplementations() {
+  console.log('Deploying TrustedIssuersRegistry');
   const trustedIssuersRegistryImplementation = await getAndDeployContract('TrustedIssuersRegistry');
+  console.log('Deploying ClaimTopicsRegistry');
   const claimTopicsRegistryImplementation = await getAndDeployContract('ClaimTopicsRegistry');
+  console.log('Deploying Token');
   const tokenImplementation = await getAndDeployContract('Token');
+  console.log('Deploying IdentityRegistry');
   const identityRegistryImplementation = await getAndDeployContract('IdentityRegistry');
+  console.log('Deploying IdentityRegistryStorage');
   const identityRegistryStorageImplementation = await getAndDeployContract('IdentityRegistryStorage');
+  console.log('Deploying ModularCompliance');
   const modularComplianceImplementation = await getAndDeployContract('ModularCompliance');
 
   return {
@@ -322,7 +379,9 @@ async function getAndDeployIdFactory(owner) {
   const identityImplementationAuthority = await getAndDeployContract('ImplementationAuthority', identityImplementation.address);
   const idFactoryArtifact = onchainid.contracts.Factory;
   const contractFactory = await ethers.getContractFactory(idFactoryArtifact.abi, idFactoryArtifact.bytecode);
-  const idFactory = await contractFactory.deploy(identityImplementationAuthority.address);
+  const idFactory = await contractFactory.deploy(identityImplementationAuthority.address, {
+    gasLimit: 10_000_000,
+  });
   await idFactory.deployed();
   return idFactory;
 }
@@ -330,16 +389,25 @@ async function getAndDeployIdFactory(owner) {
 async function getAndDeployIdGateway(idFactory, signersToApprove) {
   const idGatewayArtifact = onchainid.contracts.Gateway;
   const contractFactory = await ethers.getContractFactory(idGatewayArtifact.abi, idGatewayArtifact.bytecode);
-  const idGateway = await contractFactory.deploy(idFactory.address, signersToApprove);
+  const idGateway = await contractFactory.deploy(idFactory.address, signersToApprove, {
+    gasLimit: 10_000_000,
+  });
   await idGateway.deployed();
   return idGateway;
 }
 
 async function getAndDeployContract(s, ...initArgs) {
   const contractFactory = await ethers.getContractFactory(s);
-  const contract = await contractFactory.deploy(...initArgs);
+  const contract = await contractFactory.deploy(...initArgs, {
+    gasLimit: 10_000_000,
+  });
   await contract.deployed();
   return contract;
+}
+
+async function awaitTx(tx) {
+  const txResp = await tx;
+  return txResp.wait();
 }
 
 main().catch((err) => {
