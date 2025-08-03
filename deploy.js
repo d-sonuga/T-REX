@@ -279,9 +279,7 @@ async function createToken({ trexGateway, owner, deployer, name, symbol, decimal
     issuers,
     issuerClaims,
   };
-  const tx = await trexGateway.connect(deployer).deployTREXSuite(tokenDetails, claimDetails, {
-    gasLimit: 10_000_000,
-  });
+  const tx = await trexGateway.connect(deployer).deployTREXSuite(tokenDetails, claimDetails);
   const receipt = await tx.wait();
   const trexFactoryAddress = await trexGateway.getFactory();
   const trexFactory = await ethers.getContractAt('TREXFactory', trexFactoryAddress);
@@ -311,9 +309,7 @@ async function addKYCVerifiedClaim({ identity, issuer, claimSigner, userClaimKey
 }
 
 async function createIdentity(idGateway, walletAddress) {
-  const tx = await idGateway.deployIdentityForWallet(walletAddress, {
-    gasLimit: 10_000_000,
-  });
+  const tx = await idGateway.deployIdentityForWallet(walletAddress);
   const receipt = await tx.wait();
   const idFactoryAddress = await idGateway.idFactory();
   const idFactory = await ethers.getContractAt(onchainid.contracts.Factory.abi, idFactoryAddress);
@@ -338,9 +334,7 @@ async function createIdentityWithMgmtKey(idGateway, walletAddress, managerSigner
     ),
   );
   const signature = await approver.signMessage(ethers.utils.arrayify(hashToSign));
-  const tx = await idGateway.deployIdentityWithSaltAndManagementKeys(identityOwner, salt, mgmtKeys, signatureExpiry, signature, {
-    gasLimit: 10_000_000,
-  });
+  const tx = await idGateway.deployIdentityWithSaltAndManagementKeys(identityOwner, salt, mgmtKeys, signatureExpiry, signature);
   const receipt = await tx.wait();
   const idFactoryAddress = await idGateway.idFactory();
   const idFactory = await ethers.getContractAt(onchainid.contracts.Factory.abi, idFactoryAddress);
@@ -379,9 +373,7 @@ async function getAndDeployIdFactory(owner) {
   const identityImplementationAuthority = await getAndDeployContract('ImplementationAuthority', identityImplementation.address);
   const idFactoryArtifact = onchainid.contracts.Factory;
   const contractFactory = await ethers.getContractFactory(idFactoryArtifact.abi, idFactoryArtifact.bytecode);
-  const idFactory = await contractFactory.deploy(identityImplementationAuthority.address, {
-    gasLimit: 10_000_000,
-  });
+  const idFactory = await contractFactory.deploy(identityImplementationAuthority.address);
   await idFactory.deployed();
   return idFactory;
 }
@@ -389,18 +381,14 @@ async function getAndDeployIdFactory(owner) {
 async function getAndDeployIdGateway(idFactory, signersToApprove) {
   const idGatewayArtifact = onchainid.contracts.Gateway;
   const contractFactory = await ethers.getContractFactory(idGatewayArtifact.abi, idGatewayArtifact.bytecode);
-  const idGateway = await contractFactory.deploy(idFactory.address, signersToApprove, {
-    gasLimit: 10_000_000,
-  });
+  const idGateway = await contractFactory.deploy(idFactory.address, signersToApprove);
   await idGateway.deployed();
   return idGateway;
 }
 
 async function getAndDeployContract(s, ...initArgs) {
   const contractFactory = await ethers.getContractFactory(s);
-  const contract = await contractFactory.deploy(...initArgs, {
-    gasLimit: 10_000_000,
-  });
+  const contract = await contractFactory.deploy(...initArgs);
   await contract.deployed();
   return contract;
 }
